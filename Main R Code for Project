@@ -1,0 +1,84 @@
+knitr::opts_chunk$set(echo = TRUE, warning = F, message = F)
+library(edgeR)
+library(TCGAbiolinks)
+library(survival)
+library(survminer)
+
+```
+
+# Project set-up and download of LIHC RNAseq data
+## Choosing gene expression quantification and LIHC Cancer
+
+```{r}
+library(TCGAbiolinks)
+library(DESeq2)
+library(ggplot2)
+library(pheatmap)
+
+
+# Set up the query for LIHC data
+query <- GDCquery(project = "TCGA-LIHC", 
+                   data.category = "Transcriptome Profiling", 
+                   data.type = "Gene Expression Quantification", 
+                   experimental.strategy = "RNA-Seq", 
+                   workflow.type = "STAR - Counts")
+```
+
+```{r}
+# Download the data
+GDCdownload(query)
+data <- GDCprepare(query, save = TRUE, save.filename = "TCGA_LIHC.RData")
+```
+
+```{r}
+data <- data[data$sample_type %in% c("Primary Tumor", "Solid Tissue Normal"), ]
+
+# Create DESeq object and normalize the data
+dds <- DESeqDataSetFromMatrix(countData = assay(data),
+                              colData = colData(data),
+                              design = ~ sample_type)
+dds <- DESeq(dds)
+
+# Perform PCA analysis
+rld <- vst(dds)
+pca <- prcomp(t(assay(rld)))
+
+ggplot(as.data.frame(pca$x), aes(x=PC1, y=PC2, color=colData(rld)$sample_type)) +
+  geom_point() +
+  xlab(paste0("PC1: ", round(summary(pca)$importance[2,1]*100, 2), "% variance")) +
+  ylab(paste0("PC2: ", round(summary(pca)$importance[2,2]*100, 2), "% variance")) +
+  ggtitle("PCA of Differentially Expressed Genes by Sample Type")
+
+```
+
+
+```{r}
+# Create heatmap of differentially expressed genes
+res <- results(dds)
+res.df <- as.data.frame(res)
+gene_symbols <- select(org.Hs.eg.db, keys = gene_ids, columns = "SYMBOL", keytype = "ENSEMBL")
+merged_res <- merge(res.df, gene_symbols, by = "ENSEMBL")
+
+# We can normalise our data further by creating important areas for further analysis, like reducing the pvalue or removing lowly expressed genes with the following code: 
+
+top_rows <- assay(rld)[order(res$padj, res$pvalue), ][1:20, ]
+
+# Get corresponding ENSEMBL IDs for the top rows
+top_ids <- merged_res$ENSEMBL[order(res$padj, res$pvalue)][1:20]
+
+# Get metadata columns for annotation
+metadata_cols <- colData(dds)$sample_type
+# Set the colors for the heatmap
+col_colors <- c("green", "black", "black", "red")
+
+# Generate the heatmap
+NMF::aheatmap(top_rows, labRow = top_ids, scale = "row", distfun = "pearson", annCol = metadata_cols, col = col_colors)
+```
+
+
+```{r}
+res <- results(dds)
+plotCounts(dds, gene=which.min(res$padj), intgroup="sample_type")
+```
+
+
